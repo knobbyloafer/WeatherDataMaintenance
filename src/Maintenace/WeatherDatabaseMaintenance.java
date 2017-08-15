@@ -46,9 +46,11 @@ public class WeatherDatabaseMaintenance {
             System.out.println("Connected to the PostgreSQL server successfully.");
             //move to main
             Date oldestDate = getOldestProcessedDay();
-            if (this.foundDataToProcess(oldestDate)) {
+            while (this.foundDataToProcess(oldestDate)) {
                 // do process the day
                 processHistory(oldestDate);
+                // now see if there is more data to process
+                oldestDate = getOldestProcessedDay();
             }
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -116,7 +118,7 @@ public class WeatherDatabaseMaintenance {
             }
             else {
                 System.out.println("did not fine old stuff: today : '" + today + "', oldestDate : '" + oldestDate + "'");
-                shouldProcessData = true; //change to false
+                shouldProcessData = false;
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -150,8 +152,8 @@ public class WeatherDatabaseMaintenance {
             stmt = conn.createStatement();
             String sql = "SELECT AVG(windspeedmph), AVG(winddir), MAX(windgustmph), MAX(dailyrainin), AVG(tempf), MAX(tempf), MIN(tempf), AVG(baromin), AVG(dewptf), " +
                     "AVG(humidity), MAX(humidity), MIN(humidity), AVG(solarradiation), MAX(solarradiation), AVG(UV), MAX(UV) FROM weather.realtime " +
-                    "WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "+" + dbProperties.getProperty("timezone") +
-                    "' AND dateutc >= '" + startTime + "+" + dbProperties.getProperty("timezone") + "'";
+                    "WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "-" + dbProperties.getProperty("timezone") +
+                    "' AND dateutc >= '" + startTime + "-" + dbProperties.getProperty("timezone") + "'";
             System.out.println("sql : " + sql);
             ResultSet rs = stmt.executeQuery(sql);
             if (rs.next())
@@ -190,8 +192,8 @@ public class WeatherDatabaseMaintenance {
             }
             rs.close();
             // now need to delete the old data
-            String deleteSql = "DELETE FROM weather.realtime WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "+" + dbProperties.getProperty("timezone") +
-                    "' AND dateutc >= '" + startTime + "+" + dbProperties.getProperty("timezone") + "'";
+            String deleteSql = "DELETE FROM weather.realtime WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "-" + dbProperties.getProperty("timezone") +
+                    "' AND dateutc >= '" + startTime + "-" + dbProperties.getProperty("timezone") + "'";
             System.out.println("Executing deleting statment: " + deleteSql);
             try {
                 stmt.executeUpdate(deleteSql);
