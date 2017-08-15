@@ -10,8 +10,9 @@ import java.util.Date;
 import java.util.Properties;
 
 public class WeatherDatabaseMaintenance {
-    private final String url = "jdbc:postgresql://localhost:5432/";
     private Properties props;
+    private String url = null;
+    private Properties dbProperties;
     private WeatherData wd = new WeatherData();
     Connection conn = null;
     /**
@@ -19,22 +20,36 @@ public class WeatherDatabaseMaintenance {
      *
      * @return a Connection object
      */
+    public WeatherDatabaseMaintenance(Properties properties) {
+        try {
+            dbProperties = new Properties();
+            url = properties.getProperty("database");
+            String dbuser = properties.getProperty("dbuser");
+            String dbpassword = properties.getProperty("dbpassword");
+            String dbTimezone = properties.getProperty("timezone");
+            dbProperties.setProperty("url", url);
+            dbProperties.setProperty("user", dbuser);
+            dbProperties.setProperty("password", dbpassword);
+            dbProperties.setProperty("timezone", dbTimezone);
+        } catch (Exception e) {
+            System.out.println("Error reading properties: " + e.getMessage());
+        }
+    }
+
     public Connection connect() {
         conn = null;
-        props = new Properties();
-        props.setProperty("user","postgres");
-        props.setProperty("password","w1nter");
         //props.setProperty("currentSchema","weather");
 
         try {
             //Class.forName("org.postgresql.Driver");
-            conn = DriverManager.getConnection(url, props);
+            conn = DriverManager.getConnection(url, dbProperties);
             System.out.println("Connected to the PostgreSQL server successfully.");
+            //move to main
             Date oldestDate = getOldestProcessedDay();
-            //if (this.foundDataToProcess(oldestDate)) {
+            if (this.foundDataToProcess(oldestDate)) {
                 // do process the day
                 processHistory(oldestDate);
-            //}
+            }
         } catch (Exception e) {
             System.out.println(e.getMessage());
         }
@@ -53,7 +68,7 @@ public class WeatherDatabaseMaintenance {
             //localDate = LocalDateTime.parse(wd.dateutc);
             //System.out.println("new date: " + localDate.toString());
             stmt = conn.createStatement();
-            String sql = "SELECT dateutc FROM weather.realtime ORDER BY dateutc ASC LIMIT 1";
+            String sql = "SELECT dateutc FROM weather.realtime ORDER BY dateutc ASC LIMIT 1"; // sorted from oldest first
             ResultSet rs = stmt.executeQuery(sql);
             if (rs.next())
             {
@@ -91,6 +106,8 @@ public class WeatherDatabaseMaintenance {
             // the before method on date was returning the wrong result so this is a hack (on a hack of using deprecated methods)
             // to see if we have old data to work on
             String stringToday = today.toString();
+            if (oldestDate == null)
+                return false;
             String stringOldestDate = oldestDate.toString();
             //if (oldestDate.before(oldestDate)) {
             if (stringToday.compareTo(stringOldestDate) != 0) {
@@ -104,7 +121,7 @@ public class WeatherDatabaseMaintenance {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return false;
+        return shouldProcessData;
     }
 
     private boolean processHistory(Date dateToProcess) {
@@ -112,7 +129,7 @@ public class WeatherDatabaseMaintenance {
         try {
             Statement stmt = null;
             conn.setAutoCommit(false);
-            System.out.println("Opened database successfully");
+            System.out.println("Opened database successfully to processHistory");
             //LocalDateTime localDate = LocalDateTime.now();
             //localDate = LocalDateTime.parse(wd.dateutc);
             //System.out.println("new date: " + localDate.toString());
@@ -126,14 +143,15 @@ public class WeatherDatabaseMaintenance {
             startTime.setMinutes(0);
             startTime.setSeconds(0);
             java.sql.Timestamp endTime = new Timestamp(format.parse(dateToProcess.toString()).getTime());
-            endTime.setHours(12);
+            endTime.setHours(23);
             endTime.setMinutes(59);
             endTime.setSeconds(59);
 
             stmt = conn.createStatement();
             String sql = "SELECT AVG(windspeedmph), AVG(winddir), MAX(windgustmph), MAX(dailyrainin), AVG(tempf), MAX(tempf), MIN(tempf), AVG(baromin), AVG(dewptf), " +
                     "AVG(humidity), MAX(humidity), MIN(humidity), AVG(solarradiation), MAX(solarradiation), AVG(UV), MAX(UV) FROM weather.realtime " +
-                    "WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "' AND dateutc >= '" + startTime + "'";
+                    "WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "+" + dbProperties.getProperty("timezone") +
+                    "' AND dateutc >= '" + startTime + "+" + dbProperties.getProperty("timezone") + "'";
             System.out.println("sql : " + sql);
             ResultSet rs = stmt.executeQuery(sql);
             if (rs.next())
@@ -158,13 +176,29 @@ public class WeatherDatabaseMaintenance {
                 sql = "INSERT INTO weather.daily_history(tenant, dateutc, windspeedmphaverage, winddiraverage, windgustmphmax, " +
                         "dailyrainin, tempfaverage, tempfmax, tempfmin, barominaverage, dewptfaverage, humidityaverage, humiditymax, " +
                         "humiditymin, solarradiationaverage, solarradiationmax, uvaverage, uvmax) " +
-                        "VALUES ('TENANT0', '" + endTime + "', " + wd.windspeedmph_average + ", " + wd.winddir_average + ", " + wd.windgustmph_max +
+                        "VALUES ('TENANT0', '" + endTime + "+" + dbProperties.getProperty("timezone") + "', " + wd.windspeedmph_average + ", " + wd.winddir_average + ", " + wd.windgustmph_max +
                         ", " + wd.dailyrainin_total + ", " + wd.temp_f_average + ", " + wd.temp_f_max + ", " + wd.temp_f_min + ", " + wd.baromin_average +
                         ", " + wd.dewptf_average + ", " + wd.humidity_average + ", " + wd.humidity_max + ", " + wd.humidity_min +
                         ", " + wd.solarradiation_average + ", " + wd.solarradiation_max + ", " + wd.UV_average + ", " + wd.UV_max + ")";
                 System.out.println("sql : " + sql);
+                try {
+                    stmt.executeUpdate(sql);
+                } catch (Exception e) {
+                    stmt.cancel();
+                    System.out.println("Could not execute insert statement, canceling: " + e.getMessage());
+                }
             }
             rs.close();
+            // now need to delete the old data
+            String deleteSql = "DELETE FROM weather.realtime WHERE tenant='TENANT0' AND dateutc <= '"+ endTime + "+" + dbProperties.getProperty("timezone") +
+                    "' AND dateutc >= '" + startTime + "+" + dbProperties.getProperty("timezone") + "'";
+            System.out.println("Executing deleting statment: " + deleteSql);
+            try {
+                stmt.executeUpdate(deleteSql);
+            } catch (Exception e) {
+                stmt.cancel();
+                System.out.println("Could not execute delete statement, canceling: " + e.getMessage());
+            }
             stmt.close();
             conn.commit();
         } catch (Exception e) {
